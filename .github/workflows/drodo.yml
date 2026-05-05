@@ -1,0 +1,126 @@
+name: RDP 6 Jam ZeroTier + Clash Verge
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Setup User & Enable RDP
+        run: |
+          net user drodo Baksomemek88 /add
+          net localgroup administrators drodo /add
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+
+      - name: Download & Install ZeroTier
+        run: |
+          Invoke-WebRequest -Uri "https://download.zerotier.com/RELEASES/1.14.0/dist/ZeroTier%20One.msi" -OutFile "zerotier.msi"
+          Start-Process msiexec.exe -Wait -ArgumentList '/I zerotier.msi /quiet /qn'
+          Start-Sleep -Seconds 15
+
+      - name: Join ZeroTier Network
+        run: |
+          $paths = @(
+            "C:\Program Files (x86)\ZeroTier\One\zerotier-cli.bat",
+            "C:\Program Files\ZeroTier\One\zerotier-cli.bat",
+            "C:\ProgramData\ZeroTier\One\zerotier-cli.bat"
+          )
+          $zt_cli = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          
+          if ($zt_cli) {
+            & $zt_cli join d5e5fb6537188737
+            Write-Host "Berhasil request join! PENTING: Segera authorize node di dashboard ZeroTier."
+          } else {
+            Write-Error "zerotier-cli tidak ditemukan!"
+            exit 1
+          }
+
+      - name: Cek Status ZeroTier
+        run: |
+          Start-Sleep -Seconds 5
+          $paths = @("C:\Program Files (x86)\ZeroTier\One\zerotier-cli.bat", "C:\Program Files\ZeroTier\One\zerotier-cli.bat", "C:\ProgramData\ZeroTier\One\zerotier-cli.bat")
+          $zt_cli = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($zt_cli) { & $zt_cli status }
+
+      - name: Ping Google di Background & Buat Config VLESS
+        run: |
+          # Ping Google agar proses ada aktivitas
+          Start-Job -ScriptBlock { while($true) { ping -n 1 8.8.8.8 | Out-Null; Start-Sleep -Seconds 10 } }
+          
+          # Buat config.yaml
+          New-Item -ItemType Directory -Force -Path "C:\Users\drodo\Desktop"
+          $yamlContent = @"
+          port: 7890
+          socks-port: 7891
+          allow-lan: true
+          mode: rule
+          log-level: info
+          proxies:
+            - name: "VLESS-ServerCepat"
+              type: vless
+              server: id1.servercepat.net
+              port: 443
+              uuid: 529bacb8-3596-4bc9-87da-ca03a33897d1
+              tls: true
+              servername: id1.servercepat.net
+              skip-cert-verify: true
+              network: ws
+              ws-opts:
+                path: "/vless"
+                headers:
+                  Host: id1.servercepat.net
+          proxy-groups:
+            - name: "Proxy"
+              type: select
+              proxies:
+                - "VLESS-ServerCepat"
+                - DIRECT
+          rules:
+            - MATCH,Proxy
+          "@
+          Set-Content -Path "C:\Users\drodo\Desktop\config.yaml" -Value $yamlContent
+          Write-Host "Config YAML Clash Meta berhasil dibuat di Desktop."
+
+      - name: Download & Install Clash Verge Rev (Auto-Latest)
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          
+          # Ambil data rilis terbaru dari API GitHub
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/clash-verge-rev/clash-verge-rev/releases/latest"
+          
+          # Cari file .msi atau .exe untuk x64
+          $asset = $release.assets | Where-Object { $_.name -match "x64.*\.msi$" } | Select-Object -First 1
+          if (-not $asset) {
+              $asset = $release.assets | Where-Object { $_.name -match "x64.*setup\.exe$" } | Select-Object -First 1
+          }
+
+          if ($asset) {
+              $fileName = $asset.name
+              $downloadUrl = $asset.browser_download_url
+              Write-Host "Mendownload versi terbaru: $fileName"
+              
+              Invoke-WebRequest -Uri $downloadUrl -OutFile $fileName
+              
+              Write-Host "Menginstal $fileName secara diam-diam..."
+              if ($fileName.EndsWith(".msi")) {
+                  Start-Process msiexec.exe -Wait -ArgumentList "/I `"$fileName`" /quiet /qn"
+              } else {
+                  Start-Process ".\$fileName" -Wait -ArgumentList "/S"
+              }
+              Write-Host "Clash Verge Rev berhasil diinstal."
+          } else {
+              Write-Error "Gagal menemukan installer x64 di release terbaru!"
+              exit 1
+          }
+
+      - name: Keep Alive (Proses Berjalan)
+        run: |
+          Write-Host "RDP Aktif!"
+          Write-Host "User: drodo"
+          Write-Host "Cek Desktop saat login, config VLESS sudah siap."
+          Start-Sleep -Seconds 21500
